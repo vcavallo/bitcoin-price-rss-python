@@ -18,14 +18,35 @@ def get_bitcoin_price():
         print(f"Error fetching Bitcoin price: {e}")
         return None
 
-def create_or_update_rss(price, data_dir='data'):
+def create_or_update_rss(price, data_dir='data/public', base_url='http://localhost:8000', max_entries=10):
     """Generate RSS feed with current Bitcoin price"""
     if price is None:
         return False
         
     try:
-        base_url = 'http://localhost:8000'  # Default to localhost, can be changed
+        # Try to read existing feed
+        feed_path = os.path.join(data_dir, 'bitcoin_price_feed.xml')
+        existing_entries = []
         
+        if os.path.exists(feed_path):
+            try:
+                from feedparser import parse
+                feed = parse(feed_path)
+                # Convert existing entries to (timestamp, price, datetime) tuples
+                for entry in feed.entries:
+                    try:
+                        entry_id = entry.id.split('/')[-1]
+                        timestamp = int(entry_id)
+                        price_str = entry.title.split('$')[1].replace(',', '')
+                        price_val = float(price_str)
+                        pub_date = datetime.fromtimestamp(timestamp, timezone.utc)
+                        existing_entries.append((timestamp, price_val, pub_date))
+                    except (IndexError, ValueError):
+                        continue
+            except Exception as e:
+                print(f"Error parsing existing feed: {e}")
+        
+        # Create new feed
         fg = FeedGenerator()
         fg.id(f'{base_url}/bitcoin-price-feed')
         fg.title('Bitcoin Price Feed')
@@ -33,6 +54,7 @@ def create_or_update_rss(price, data_dir='data'):
         fg.link(href=base_url)
         fg.language('en')
         
+        # Add current price as new entry
         timestamp = int(time.time())
         current_time = datetime.now(timezone.utc)
         
@@ -42,6 +64,16 @@ def create_or_update_rss(price, data_dir='data'):
         fe.link(href=base_url)
         fe.description(f'The current price of Bitcoin is ${price:,.2f} USD as of {current_time.strftime("%Y-%m-%d %H:%M:%S")} UTC')
         fe.published(current_time)
+        
+        # Add previous entries
+        existing_entries.sort(reverse=True)  # Sort by timestamp descending
+        for prev_timestamp, prev_price, prev_time in existing_entries[:max_entries-1]:
+            fe = fg.add_entry()
+            fe.id(f'{base_url}/price/{prev_timestamp}')
+            fe.title(f'Bitcoin Price: ${prev_price:,.2f}')
+            fe.link(href=base_url)
+            fe.description(f'The price of Bitcoin was ${prev_price:,.2f} USD as of {prev_time.strftime("%Y-%m-%d %H:%M:%S")} UTC')
+            fe.published(prev_time)
         
         # Ensure data directory exists
         os.makedirs(data_dir, exist_ok=True)
@@ -89,11 +121,17 @@ class SimpleHTTPRequestHandlerWithCORS(http.server.SimpleHTTPRequestHandler):
         self.send_header('Access-Control-Allow-Origin', '*')
         super().end_headers()
 
-def run_http_server(port=8000, directory='data'):
+class SimpleHTTPRequestHandlerWithCORS(http.server.SimpleHTTPRequestHandler):
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, directory='data/public', **kwargs)
+        
+    def end_headers(self):
+        self.send_header('Access-Control-Allow-Origin', '*')
+        super().end_headers()
+
+def run_http_server(port=8000):
     """Run a simple HTTP server to serve the RSS feed"""
-    os.chdir(directory)
-    handler = SimpleHTTPRequestHandlerWithCORS
-    with socketserver.TCPServer(("", port), handler) as httpd:
+    with socketserver.TCPServer(("", port), SimpleHTTPRequestHandlerWithCORS) as httpd:
         print(f"Serving at http://localhost:{port}")
         httpd.serve_forever()
 
@@ -116,7 +154,8 @@ def main():
             print(f"Unexpected error in main loop: {e}")
         
         # Sleep for 30 minutes
-        time.sleep(1800)
+        # time.sleep(1800)
+        time.sleep(100)
 
 if __name__ == "__main__":
     main()
