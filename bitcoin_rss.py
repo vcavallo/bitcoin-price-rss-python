@@ -30,21 +30,45 @@ def create_or_update_rss(price, data_dir='data/public', base_url='http://localho
         
         if os.path.exists(feed_path):
             try:
-                from feedparser import parse
-                feed = parse(feed_path)
-                # Convert existing entries to (timestamp, price, datetime) tuples
-                for entry in feed.entries:
-                    try:
-                        entry_id = entry.id.split('/')[-1]
-                        timestamp = int(entry_id)
-                        price_str = entry.title.split('$')[1].replace(',', '')
-                        price_val = float(price_str)
-                        pub_date = datetime.fromtimestamp(timestamp, timezone.utc)
-                        existing_entries.append((timestamp, price_val, pub_date))
-                    except (IndexError, ValueError):
-                        continue
+                # Try to use feedparser if available
+                try:
+                    from feedparser import parse
+                    feed = parse(feed_path)
+                    # Convert existing entries to (timestamp, price, datetime) tuples
+                    for entry in feed.entries:
+                        try:
+                            entry_id = entry.id.split('/')[-1]
+                            timestamp = int(entry_id)
+                            price_str = entry.title.split('$')[1].replace(',', '')
+                            price_val = float(price_str)
+                            pub_date = datetime.fromtimestamp(timestamp, timezone.utc)
+                            existing_entries.append((timestamp, price_val, pub_date))
+                        except (IndexError, ValueError):
+                            continue
+                except ImportError:
+                    # Fallback to simple XML parsing if feedparser is not available
+                    import xml.etree.ElementTree as ET
+                    tree = ET.parse(feed_path)
+                    root = tree.getroot()
+                    for item in root.findall('.//item'):
+                        try:
+                            guid = item.find('guid').text
+                            title = item.find('title').text
+                            pubDate = item.find('pubDate').text
+                            
+                            entry_id = guid.split('/')[-1]
+                            timestamp = int(entry_id)
+                            price_str = title.split('$')[1].replace(',', '')
+                            price_val = float(price_str)
+                            # Parse the RFC 822 date format
+                            from email.utils import parsedate_to_datetime
+                            pub_date = parsedate_to_datetime(pubDate)
+                            existing_entries.append((timestamp, price_val, pub_date))
+                        except (AttributeError, IndexError, ValueError):
+                            continue
             except Exception as e:
                 print(f"Error parsing existing feed: {e}")
+                # Continue with empty existing entries if parsing fails
         
         # Create new feed
         fg = FeedGenerator()
